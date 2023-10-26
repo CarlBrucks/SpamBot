@@ -3,61 +3,32 @@ from datetime import datetime,timedelta
 import time
 from telebot import types
 import json
-import asyncio
-import threading
+from apscheduler.schedulers.background import BackgroundScheduler
+
 global scheduled_posts
-#bot = telebot.TeleBot('6325448607:AAG1A6SrroRxRflwo0fPx5bW3ix0o3NA8pY') # avenues token
-#bot = telebot.TeleBot('6590558087:AAHrxCBnqfl_YCO3F2Xz71kFo1f3dLfHfWY') # clients token
-bot = telebot.TeleBot('6485397598:AAFhK43IdxrK6Dk3oTpruk-TFpNj2U9ULVk') # test token
-#chat_ids = [-1001957519885] # clients chat
-chat_ids = [-1001922928792] # test chat
-#chat_ids = [-1001834326731] # avenues chat
-superadmins = [919422317,1387957204,5016708080,810311297,6609142734]
 scheduled_posts = []
-now = datetime.now()
-year = datetime.now().year
-async def load_db():
-    with open("db.json", "r") as read_file:
-        db = json.load(read_file)
-    for post in db:
-        time_end = datetime.strptime(f"{year}.{post['time_end']}", '%Y.%d.%m %H:%M')
-        if time_end > now:
-            post['time_end'] = time_end
-            scheduled_posts.append(post)
-
-        thread1 = threading.Thread(target=schedule_message, args=(chat_ids[0], post["text"], post["photo"], post["time"],
-                             post["time_delta"], post["time_end"], post["id"]))
-        await thread1.start()
-        thread1.join()
-async def schedule_message(chat_id,text_spam,photo_id,post_time,time_delta,time_end,id):
-    print("test23")
-    year = datetime.now().year
-    time_end = datetime.strptime(f"{year}.{time_end}", '%Y.%d.%m %H:%M')
-    post_time = datetime.strptime(f"{post_time}", '%Y-%m-%d %H:%M:%S')
+bot = telebot.TeleBot('6485397598:AAFhK43IdxrK6Dk3oTpruk-TFpNj2U9ULVk') # test token
+sched = BackgroundScheduler()
+superadmins = [919422317,1387957204,5016708080,810311297,6609142734]
+main_chat_id = -1001922928792 # test chat
+delta_time = 1
+#sched.add_job(bot.send_photo,"interval",hours=delta_time,args=(chat_id,text_to_spam,caption,"HTML"))
+def refresh():
     now = datetime.now()
-    while time_end > now:
-        try:
-            delta_time =post_time -datetime.now()
-            await asyncio.sleep(delta_time.seconds+2)
-            for target_chat_id in chat_ids:
-                print('test1')
-                print(scheduled_posts)
-                for post in scheduled_posts:
-                    if post["id"] == id:
-                        print('test4')
-                        break
-                else:
-                    return
-                if photo_id:
-                    bot.send_photo(target_chat_id, photo_id, caption=text_spam,parse_mode="HTML")
-                else:
-                    bot.send_message(target_chat_id, text_spam,parse_mode="HTML")
-            post_time = post_time + timedelta(hours=time_delta)
-
-        except Exception as e:
-            print(e)
-            bot.send_message(chat_id, "Произошла ошибка")
-    print('While worked!')
+    for job in sched.get_jobs():
+        id = job.id
+        for post in scheduled_posts:
+            if str(post['id']) == id:
+                if post['time_end']<now:
+                    sched.remove_job(job_id=id)
+def schedule_message(text_spam, photo_id,id):
+    if photo_id != None:
+        bot.send_photo(main_chat_id, photo_id,text_spam, parse_mode='HTML')
+        sched.add_job(bot.send_photo, "interval", hours=delta_time, args=(main_chat_id, photo_id, text_spam, "HTML"),
+                      id=str(id))
+    else:
+        bot.send_message(main_chat_id,text_spam,parse_mode='HTML')
+        sched.add_job(bot.send_message, "interval", hours=delta_time, args=(main_chat_id, text_spam, "HTML"), id=str(id))
 @bot.message_handler(commands=['start'])
 def start_message(message):
     if message.chat.type == "private" and message.chat.id in superadmins:
@@ -77,9 +48,6 @@ def func(message):
         if message.text == "Запланировать пост":
             handle_schedule(message)
         if message.text == "Отменить пост":
-            for post in scheduled_posts:
-                if now>=post['time_end']:
-                    scheduled_posts.remove(post)
             markup = telebot.types.InlineKeyboardMarkup(row_width=2)
             for post in scheduled_posts:
                 print(post)
@@ -115,13 +83,11 @@ def podcategors(call):
                 bot.send_photo(call.message.chat.id,
                                caption=f'''Пост от {time_post.day}.{time_post.month} {time_post.hour}:{minute}
 Пост будет повторяться через {post['time_delta']}
-Автопост заканчивается в  {post['time_end']}
 Текст поста: {post["text"]}''', reply_markup=markup, photo=post['photo'])
             else:
                 bot.send_message(call.message.chat.id,
                                  f'''Пост от {time_post.day}.{time_post.month} {time_post.hour}:{minute}
 Пост будет повторяться через {post['time_delta']}
-Автопост заканчивается в  {post['time_end']}
 Текст поста: {post["text"]}''', reply_markup=markup)
     if call.data[:5] == 'page_':
         page = call.data[5:]
@@ -177,7 +143,7 @@ def podcategors(call):
         for post in scheduled_posts:
             if post['id'] != int(id):
                 continue
-            scheduled_posts.remove(post)
+            sched.remove_job(job_id=id)
             bot.send_message(call.message.chat.id,
                              f'''Пост успешно удален!''')
 
@@ -216,9 +182,7 @@ def ask_for_time2(msg, chat_id, text,photo_id,post_time):
         bot.send_message(chat_id, "Введите время окончания публикаций:\nФормат: дд.мм 00:00")
         bot.register_next_step_handler(msg, lambda msg: ask_for_time3(msg, chat_id, text, photo_id,post_time,time_delta))
 def ask_for_time3(message,chat_id, text_spam, photo_id,post_time,time_delta):
-        year = datetime.now().year
         time_end_2 = message.text
-        time_end = datetime.strptime(f"{year}.{time_end_2}", '%Y.%d.%m %H:%M')
         id = 0
         for i in scheduled_posts:
             if id < i['id']:
@@ -228,32 +192,28 @@ def ask_for_time3(message,chat_id, text_spam, photo_id,post_time,time_delta):
                      "chat_id": message.chat.id,"post_time":str(post_time),"time_delta":time_delta,"time_end":time_end_2}
         with open("posts.json", "w") as write_file:
             json.dump(last_post, write_file)
-        send_post = schedule_message(last_post["chat_id"],last_post["text"],last_post["photo"],last_post["time"],last_post["time_delta"],last_post["time_end"],last_post["id"])
-        scheduled_posts.append({'text': last_post['text'], 'time': datetime.strptime(f"{last_post['time']}", '%Y-%m-%d %H:%M:%S'),
-                                'photo': last_post['photo'], "id": last_post['id'],
-                                "time_delta": last_post['time_delta'], "time_end": time_end})
+        sched.add_job(schedule_message, "date", run_date=post_time, args=(text_spam, photo_id,id))
         bot.send_message(chat_id, "Пост успешно запланирован!")
-        ioloop = asyncio.new_event_loop()
-        tasks = [
-            ioloop.create_task(send_post)]
-        ioloop.run_until_complete(asyncio.wait(tasks))
-        ioloop.close()
         with open("db.json", "r") as read_file:
             db = json.load(read_file)
         db.append({'text': text_spam, 'time': str(post_time), 'photo': photo_id, "id": id,"time_delta":time_delta,"time_end":time_end_2})
         with open("db.json", "w") as write_file:
             json.dump(db, write_file)
-
-
-
 if __name__=='__main__':
     while True:
         try:
-            load = load_db()
-            load.send(None)
+            with open("db.json", "r") as read_file:
+                db = json.load(read_file)
+            for post in db:
+                scheduled_posts.append(post)
+                next_time_post = datetime.strptime(post['time'], '%Y-%m-%d %H:%M:%S')
+                while next_time_post<datetime.now():
+                    next_time_post = next_time_post + timedelta(hours=post['time_delta'])
+                sched.add_job(schedule_message, "date", run_date=next_time_post, args=(post["text"],post["photo"],post['id']))
+            sched.add_job(refresh, "interval", hours=1)
+            sched.start()
             bot.infinity_polling()
         except Exception as e:
             print(e)
             time.sleep(5)
             continue
-#bot.polling(non_stop=True, interval=0)
